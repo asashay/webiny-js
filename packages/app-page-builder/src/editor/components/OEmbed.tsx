@@ -128,7 +128,4 @@ const OEmbed = React.memo((props: OEmbedProps) => {
     return url ? renderEmbed() : renderEmpty();
 });
 
-export default connect<any, any, any>(
-    null,
-    { updateElement }
-)(OEmbed);
+export default connect<any, any, any>(null, { updateElement })(OEmbed);

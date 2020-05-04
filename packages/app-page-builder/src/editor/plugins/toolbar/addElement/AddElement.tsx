@@ -17,7 +17,10 @@ import { Icon } from "@webiny/ui/Icon";
 import { Typography } from "@webiny/ui/Typography";
 import { ButtonFloating } from "@webiny/ui/Button";
 import { ReactComponent as AddIcon } from "@webiny/app-page-builder/editor/assets/icons/add.svg";
-import { PbEditorPageElementGroupPlugin, PbEditorPageElementPlugin } from "@webiny/app-page-builder/types";
+import {
+    PbEditorPageElementGroupPlugin,
+    PbEditorPageElementPlugin
+} from "@webiny/app-page-builder/types";
 
 const ADD_ELEMENT = "pb-editor-toolbar-add-element";
 
