@@ -85,6 +85,9 @@ const OEmbed = React.memo((props: OEmbedProps) => {
         skip,
         variables: source,
         onCompleted: data => {
+            if (skip) {
+                return;
+            }
             const { data: oembed, error } = get(data, "pageBuilder.oembedData");
             if (oembed) {
                 // Store loaded oembed data

@@ -2,18 +2,12 @@ const vars = {
     region: process.env.AWS_REGION,
     debug: "true",
     bucket: process.env.S3_BUCKET,
-    httpHandlerApolloServer: {
+    handlerApolloServer: {
         server: {
             introspection: process.env.GRAPHQL_INTROSPECTION,
             playground: process.env.GRAPHQL_PLAYGROUND
         },
         debug: true
-    },
-    apollo: {
-        server: {
-            introspection: process.env.GRAPHQL_INTROSPECTION,
-            playground: process.env.GRAPHQL_PLAYGROUND
-        }
     },
     mongodb: {
         server: process.env.MONGODB_SERVER,
@@ -23,12 +17,13 @@ const vars = {
         token: {
             expiresIn: 2592000,
             secret: process.env.JWT_SECRET
-        }
+        },
+        validateAccessTokenFunction: "${validateAccessToken.name}"
     }
 };
 
 const apolloServiceDefinitions = {
-    APOLLO_SERVER_OPTIONS: vars.httpHandlerApolloServer,
+    APOLLO_SERVER_OPTIONS: vars.handlerApolloServer,
     DB_PROXY_OPTIONS: {
         functionArn: "${dbProxy.arn}"
     },
@@ -38,39 +33,38 @@ const apolloServiceDefinitions = {
 module.exports = () => ({
     resources: {
         apolloGateway: {
-            watch: ["/apolloGateway/build"],
+            watch: ["./apolloGateway/build"],
             build: {
-                root: "/apolloGateway",
+                root: "./apolloGateway",
                 script: "yarn build",
                 define: {
-                    // TODO: changes in these parameters do not re-deploy lambda!!!
                     // Maybe we should upgrade lambda component to check file content hash?
-                    HTTP_HANDLER_APOLLO_GATEWAY_OPTIONS: {
-                        ...vars.httpHandlerApolloServer,
+                    HANDLER_APOLLO_GATEWAY_OPTIONS: {
+                        ...vars.handlerApolloServer,
                         services: [
                             {
                                 name: "security",
-                                url: "${security.api.graphqlUrl}"
+                                function: "${security.name}"
                             },
                             {
                                 name: "i18n",
-                                url: "${i18n.api.graphqlUrl}"
+                                function: "${i18n.name}"
                             },
                             {
                                 name: "files",
-                                url: "${filesGraphQL.api.graphqlUrl}"
+                                function: "${filesGraphQL.name}"
                             },
                             {
                                 name: "pageBuilder",
-                                url: "${pageBuilder.api.graphqlUrl}"
+                                function: "${pageBuilder.name}"
                             },
                             {
                                 name: "formBuilder",
-                                url: "${formBuilder.api.graphqlUrl}"
+                                function: "${formBuilder.name}"
                             },
                             {
                                 name: "headlessCms",
-                                url: "${headlessCms.api.graphqlUrl}"
+                                function: "${headlessCms.name}"
                             }
                         ]
                     }
@@ -80,10 +74,11 @@ module.exports = () => ({
                 component: "@webiny/serverless-function",
                 inputs: {
                     region: vars.region,
-                    code: "/apolloGateway/build",
+                    description: "Apollo Gateway",
+                    code: "./apolloGateway/build",
                     handler: "handler.handler",
                     memory: 512,
-                    timeout: 29,
+                    timeout: 30,
                     env: {
                         DEBUG: vars.debug
                     }
@@ -119,9 +114,9 @@ module.exports = () => ({
             }
         },
         security: {
-            watch: ["/security/build"],
+            watch: ["./security/graphql/build"],
             build: {
-                root: "/security",
+                root: "./security/graphql",
                 script: "yarn build",
                 define: {
                     ...apolloServiceDefinitions,
@@ -132,188 +127,286 @@ module.exports = () => ({
                 }
             },
             deploy: {
-                component: "@webiny/serverless-apollo-service",
+                component: "@webiny/serverless-function",
                 inputs: {
+                    description: "Security GraphQL API",
                     region: vars.region,
-                    function: {
-                        code: "/security/build",
-                        handler: "handler.handler",
-                        memory: 512,
-                        timeout: 30,
-                        env: {
-                            DEBUG: vars.debug
-                        }
+                    code: "./security/graphql/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    timeout: 30,
+                    env: {
+                        DEBUG: vars.debug
                     }
                 }
             }
         },
-        files: {
+        validateAccessToken: {
+            watch: ["./security/validateAccessToken/build"],
+            build: {
+                root: "./security/validateAccessToken",
+                script: "yarn build",
+                define: {
+                    DB_PROXY_OPTIONS: apolloServiceDefinitions.DB_PROXY_OPTIONS
+                }
+            },
             deploy: {
-                component: "@webiny/serverless-files",
+                component: "@webiny/serverless-function",
                 inputs: {
                     region: vars.region,
-                    bucket: vars.bucket,
+                    code: "./security/validateAccessToken/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    timeout: 30,
+                    env: {
+                        DEBUG: vars.debug
+                    }
+                }
+            }
+        },
+        filesDownload: {
+            watch: ["./files/download/build"],
+            build: {
+                root: "./files/download",
+                script: `yarn build`
+            },
+            deploy: {
+                component: "@webiny/serverless-function",
+                inputs: {
+                    description: "Serves previously uploaded files.",
+                    region: vars.region,
+                    code: "./files/download/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    timeout: 10,
+                    env: {
+                        S3_BUCKET: vars.bucket,
+                        IMAGE_TRANSFORMER_FUNCTION: "${imageTransformer.arn}"
+                    }
+                }
+            }
+        },
+        imageTransformer: {
+            watch: ["./files/transform/build"],
+            build: {
+                root: "./files/transform",
+                script: `yarn build`
+            },
+            deploy: {
+                component: "@webiny/serverless-function",
+                inputs: {
+                    description: "Performs image optimization, resizing, etc.",
+                    region: vars.region,
+                    code: "./files/transform/build",
+                    handler: "handler.handler",
+                    memory: 1600,
+                    timeout: 30,
+                    env: {
+                        S3_BUCKET: vars.bucket
+                    }
+                }
+            }
+        },
+        filesManage: {
+            watch: ["./files/manage/build"],
+            build: {
+                root: "./files/manage",
+                script: `yarn build`
+            },
+            deploy: {
+                component: "@webiny/serverless-function",
+                inputs: {
+                    description: "Triggered when a file is deleted.",
+                    region: vars.region,
+                    code: "./files/manage/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    timeout: 10,
+                    permissions: [
+                        {
+                            Action: "lambda:InvokeFunction",
+                            Principal: "s3.amazonaws.com",
+                            StatementId: "s3invoke",
+                            SourceArn: `arn:aws:s3:::${vars.bucket}`
+                        }
+                    ],
+                    env: {
+                        S3_BUCKET: vars.bucket
+                    }
+                }
+            }
+        },
+        filesBucket: {
+            deploy: {
+                component: "@webiny/serverless-aws-s3",
+                inputs: {
+                    deleteBucketOnRemove: false,
+                    region: vars.region,
+                    name: vars.bucket,
                     storage: {
                         accelerated: false
+                    },
+                    cors: {
+                        CORSRules: [
+                            {
+                                AllowedHeaders: ["*"],
+                                AllowedMethods: ["POST", "GET"],
+                                AllowedOrigins: ["*"],
+                                MaxAgeSeconds: 3000
+                            }
+                        ]
+                    },
+                    notificationConfiguration: {
+                        LambdaFunctionConfigurations: [
+                            {
+                                LambdaFunctionArn: "${filesManage.arn}",
+                                Events: ["s3:ObjectRemoved:*"]
+                            }
+                        ]
                     }
                 }
             }
         },
         filesGraphQL: {
-            watch: ["/files/build"],
+            watch: ["./files/graphql/build"],
             build: {
-                root: "/files",
+                root: "./files/graphql",
                 script: "yarn build",
                 define: apolloServiceDefinitions
             },
             deploy: {
-                component: "@webiny/serverless-apollo-service",
+                component: "@webiny/serverless-function",
                 inputs: {
                     region: vars.region,
                     description: "Files GraphQL API",
-                    binaryMediaTypes: ["*/*"],
-                    endpoints: "${files.api.endpoints}",
-                    function: {
-                        code: "/files/build",
-                        handler: "handler.handler",
-                        memory: 512,
-                        env: {
-                            DEBUG: vars.debug,
-                            S3_BUCKET: vars.bucket,
-                            UPLOAD_MIN_FILE_SIZE: "0",
-                            UPLOAD_MAX_FILE_SIZE: "26214400"
-                        }
+                    code: "./files/graphql/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    env: {
+                        DEBUG: vars.debug,
+                        S3_BUCKET: vars.bucket,
+                        UPLOAD_MIN_FILE_SIZE: "0",
+                        UPLOAD_MAX_FILE_SIZE: "26214400"
                     }
                 }
             }
         },
         i18n: {
-            watch: ["/i18n/build"],
+            watch: ["./i18n/build"],
             build: {
-                root: "/i18n",
+                root: "./i18n",
                 script: "yarn build",
                 define: apolloServiceDefinitions
             },
             deploy: {
-                component: "@webiny/serverless-apollo-service",
+                component: "@webiny/serverless-function",
                 inputs: {
                     region: vars.region,
                     description: "I18N GraphQL API",
-                    function: {
-                        code: "/i18n/build",
-                        handler: "handler.handler",
-                        memory: 512,
-                        env: {
-                            DEBUG: vars.debug
-                        }
+                    code: "./i18n/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    env: {
+                        DEBUG: vars.debug
                     }
                 }
             }
         },
         pageBuilderInstallation: {
             deploy: {
-                component: "@webiny/serverless-page-builder-installation",
+                component: "@webiny/serverless-aws-s3-object",
                 inputs: {
-                    region: vars.region
+                    region: vars.region,
+                    bucket: "${filesBucket.name}",
+                    deleteObjectOnRemove: true,
+                    object: {
+                        source: "@webiny/api-page-builder/installation",
+                        key: "page-builder-installation.zip",
+                        zip: true
+                    }
                 }
             }
         },
         pageBuilder: {
-            watch: ["/pageBuilder/build"],
+            watch: ["./pageBuilder/build"],
             build: {
-                root: "/pageBuilder",
+                root: "./pageBuilder",
                 script: "yarn build",
                 define: apolloServiceDefinitions
             },
             deploy: {
-                component: "@webiny/serverless-apollo-service",
+                component: "@webiny/serverless-function",
                 inputs: {
                     region: vars.region,
-                    function: {
-                        code: "/pageBuilder/build",
-                        handler: "handler.handler",
-                        memory: 512,
-                        timeout: 30,
-                        env: {
-                            DEBUG: vars.debug,
-                            FILES_API_URL: "${filesGraphQL.api.graphqlUrl}",
-                            INSTALLATION_S3_BUCKET: "${pageBuilderInstallation.bucketName}",
-                            INSTALLATION_FILES_ZIP_KEY: "${pageBuilderInstallation.archiveKey}"
-                        }
+                    description: "Page Builder GraphQL API",
+                    code: "./pageBuilder/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    timeout: 30,
+                    env: {
+                        DEBUG: vars.debug,
+                        INSTALLATION_S3_BUCKET: vars.bucket,
+                        INSTALLATION_FILES_ZIP_KEY: "${pageBuilderInstallation.key}"
                     }
                 }
             }
         },
         formBuilder: {
-            watch: ["/formBuilder/build"],
+            watch: ["./formBuilder/build"],
             build: {
-                root: "/formBuilder",
+                root: "./formBuilder",
                 script: "yarn build",
-                define: {
-                    ...apolloServiceDefinitions,
-                    I18N_OPTIONS: {
-                        graphqlUrl: "${i18n.api.graphqlUrl}"
-                    }
-                }
+                define: apolloServiceDefinitions
             },
             deploy: {
-                component: "@webiny/serverless-apollo-service",
+                component: "@webiny/serverless-function",
                 inputs: {
                     region: vars.region,
-                    function: {
-                        code: "/formBuilder/build",
-                        handler: "handler.handler",
-                        memory: 512,
-                        timeout: 30,
-                        env: {
-                            DEBUG: vars.debug,
-                            FILES_API_URL: "${filesGraphQL.api.graphqlUrl}"
-                        }
+                    description: "Form Builder GraphQL API",
+                    code: "./formBuilder/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    timeout: 30,
+                    env: {
+                        DEBUG: vars.debug
                     }
                 }
             }
         },
         headlessCms: {
-            watch: ["/headless/graphql/build"],
+            watch: ["./headless/graphql/build"],
             build: {
-                root: "/headless/graphql",
+                root: "./headless/graphql",
                 script: "yarn build",
                 define: apolloServiceDefinitions
             },
             deploy: {
-                component: "@webiny/serverless-apollo-service",
+                component: "@webiny/serverless-function",
                 inputs: {
                     region: vars.region,
                     description: "I18N GraphQL API",
-                    function: {
-                        code: "/headless/graphql/build",
-                        handler: "handler.handler",
-                        memory: 512,
-                        env: {
-                            DEBUG: vars.debug
-                        }
+                    code: "./headless/graphql/build",
+                    handler: "handler.handler",
+                    memory: 512,
+                    env: {
+                        DEBUG: vars.debug
                     }
                 }
             }
         },
         headlessCmsHandler: {
-            watch: ["/headless/handler/build"],
+            watch: ["./headless/handler/build"],
             build: {
-                root: "/headless/handler",
+                root: "./headless/handler",
                 script: "yarn build",
-                define: {
-                    ...apolloServiceDefinitions,
-                    I18N_OPTIONS: {
-                        graphqlUrl: "${i18n.api.graphqlUrl}"
-                    }
-                }
+                define: apolloServiceDefinitions
             },
             deploy: {
                 component: "@webiny/serverless-function",
                 inputs: {
                     description: "Headless CMS GraphQL API (handler)",
                     region: vars.region,
-                    code: "/headless/handler/build",
+                    code: "./headless/handler/build",
                     handler: "handler.handler",
                     memory: 512,
                     env: {
@@ -327,16 +420,22 @@ module.exports = () => ({
             inputs: {
                 region: vars.region,
                 description: "Main API Gateway",
+                binaryMediaTypes: ["*/*"],
                 endpoints: [
                     {
                         path: "/graphql",
                         method: "ANY",
-                        function: "${apolloGateway}"
+                        function: "${apolloGateway.arn}"
+                    },
+                    {
+                        path: "/files/{path}",
+                        method: "ANY",
+                        function: "${filesDownload.arn}"
                     },
                     {
                         path: "/cms/{key+}",
                         method: "ANY",
-                        function: "${headlessCmsHandler}"
+                        function: "${headlessCmsHandler.arn}"
                     }
                 ]
             }
@@ -345,14 +444,6 @@ module.exports = () => ({
             component: "@webiny/serverless-aws-cloudfront",
             inputs: {
                 origins: [
-                    {
-                        url: "${filesGraphQL.api.url}",
-                        pathPatterns: {
-                            "/files/*": {
-                                ttl: 2592000 // 1 month
-                            }
-                        }
-                    },
                     {
                         url: "${api.url}",
                         pathPatterns: {
@@ -370,6 +461,9 @@ module.exports = () => ({
                                     "PATCH",
                                     "DELETE"
                                 ]
+                            },
+                            "/files/*": {
+                                ttl: 2592000 // 1 month
                             },
                             "/cms*": {
                                 ttl: 0,
